@@ -221,3 +221,106 @@ json.Marsh() can convert a struct into a []byte. But a member must meet all of t
 
 Exported anonymous embedded structs are not marshaled.
 
+## Closure pitfall's c++ counterpart
+Inside a for loop, using the iteration variable in a go routine or a callback function is a well-known pitfall. I happened to create a counterpart in c++ to help understand such phenomenon:
+
+```c++
+vector<string> temp = {"0","1","2","3","4","5"};
+vector<function<void()>> callbacks;
+int i = 0;
+for(;i<temp.size()-1;++i) {
+    callbacks.emplace_back([&]() {
+        cout<<temp[i]<<endl;
+    });
+}
+for(auto f: callbacks) {
+    f(); // always output 5
+}
+return 0;
+```
+
+## Method
+### Non-pointer receiver
+A method with a non-pointer receiver wouldn't change the member of the struct in that a copy is created for use inside that method.
+
+A method with pointer receiver cannot be called on a temporary object(a rvalue in c++).
+
+## Embedded struct
+When a struct(could also be a type) A is embedded in another struct B, its exported members, including variables and methods are *promoted* to B. It is a mistake to think it's *inheritance*, as we see in Java or C++. In fact, we should think that B *has-a* A, not *is-a* A. Trying to pass a pointer or instance of B as parameters where A is required cause compilation error:
+
+```golang
+type foo struct {
+	val int
+}
+
+type bar struct {
+	foo
+}
+
+func Increase(f *foo) {
+	f.val++
+}
+
+func main() {
+	var b bar
+	Increase(&b) // cannot use &b (value of type *bar) as *foo value in argument to Increase
+	Increase(&b.foo) // valid
+}
+```
+
+## Method Value VS Method Expression
+- Method value: var_name + "." + method_name. It "remembers" the receiver, so when such value is called, we don't need to input the variable name.
+
+- Method expression: struct_name + "." + method_name. When we call a method expression, we must send in a variable of that struct.
+
+```golang
+type bar struct {
+	val int
+}
+
+func (b *bar) Add(num int) {
+	b.val += num
+}
+
+func (b *bar) String() string {
+	return fmt.Sprintf("%d", b.val)
+}
+
+func main() {
+	var tmp bar
+	method_value := tmp.Add  // var_name.method_name
+	method_expression := (*bar).Add  // struct_name.method_name
+	method_value(100)
+	fmt.Println(tmp) // output: {100}
+	method_expression(&tmp,1000)
+	fmt.Println(tmp) // output: {1100}
+}
+```
+
+Here is the c++ counterpart:
+```c++
+struct bar {
+    int val;
+    bar(): val(0) {}
+    void Add(int num) {
+        val += num;
+    }
+    string toString() const {
+        return to_string(val);
+    }
+};
+
+int main() {
+    bar tmp;
+    auto mimic_method_value = std::bind(&bar::Add, &tmp, std::placeholders::_1);
+    auto mimic_method_expression = std::bind(&bar::Add, std::placeholders::_1, std::placeholders::_2);
+    mimic_method_value(100);
+    cout << tmp.toString() << endl;
+    mimic_method_expression(tmp, 1000);
+    cout << tmp.toString() << endl;
+    return 0;
+}
+```
+
+## fmt.Print
+If a struct only has a String() method with pointer receiver, call fmt.Print() for an instance(not pointer) of such struct wouldn't trigger the String() unless we call in this way: fmt.Printf(&x).
